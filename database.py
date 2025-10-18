@@ -6,16 +6,20 @@ import config
 
 class Database:
     def __init__(self):
-        self.conn = psycopg2.connect(
-            host=config.DB_HOST,
-            database=config.DB_NAME,
-            user=config.DB_USER,
-            password=config.DB_PASSWORD,
-            port=config.DB_PORT
-        )
-        self.conn.autocommit = True
-        self.create_tables()
-        self.init_admins()
+        try:
+            self.conn = psycopg2.connect(
+                host=config.DB_HOST,
+                database=config.DB_NAME,
+                user=config.DB_USER,
+                password=config.DB_PASSWORD,
+                port=config.DB_PORT
+            )
+            self.conn.autocommit = True
+            self.create_tables()
+            self.init_admins()
+        except Exception as e:
+            print(f"❌ Ошибка подключения к БД: {e}")
+            raise
     
     def create_tables(self):
         """Создание всех таблиц БД"""
@@ -148,7 +152,7 @@ class Database:
                     RETURNING (xmax = 0) AS inserted
                 """, (telegram_id, username, referrer_id))
                 result = cur.fetchone()
-                return result[0]  # True если новый пользователь
+                return result[0] if result else False
             except Exception as e:
                 print(f"Ошибка добавления пользователя: {e}")
                 return False
@@ -223,6 +227,12 @@ class Database:
             """, (user_id, file_id, round_id))
             return cur.fetchone()[0]
     
+    def get_photo_by_id(self, photo_id: int):
+        """Получить фото по ID"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM photos WHERE id = %s", (photo_id,))
+            return cur.fetchone()
+    
     def update_photo_status(self, photo_id: int, status: str):
         """Обновить статус фото (approved/rejected)"""
         with self.conn.cursor() as cur:
@@ -268,6 +278,30 @@ class Database:
             
             cur.execute(query, (round_id,))
             return cur.fetchall()
+    
+    def get_unpaired_photos(self, round_id: int):
+        """Получить одобренные фото которые еще не в батлах"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT p.* FROM photos p
+                WHERE p.round_id = %s 
+                  AND p.status = 'approved'
+                  AND p.id NOT IN (
+                      SELECT photo1_id FROM battles WHERE round_id = %s
+                      UNION
+                      SELECT photo2_id FROM battles WHERE round_id = %s
+                  )
+                ORDER BY p.created_at
+            """, (round_id, round_id, round_id))
+            return cur.fetchall()
+    
+    def count_battles_in_round(self, round_id: int):
+        """Подсчитать количество батлов в раунде"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM battles WHERE round_id = %s
+            """, (round_id,))
+            return cur.fetchone()[0]
     
     def create_battle(self, round_id: int, photo1_id: int, photo2_id: int):
         """Создать батл между двумя фото"""
@@ -363,7 +397,7 @@ class Database:
             user = cur.fetchone()
             extra_votes = user['extra_votes'] if user else 0
             
-            # Количество активных рефералов (тех кто отправил хотя бы 1 фото)
+            # Количество активных рефералов
             cur.execute("""
                 SELECT COUNT(DISTINCT u.telegram_id) as active_referrals
                 FROM users u
