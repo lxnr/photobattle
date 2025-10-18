@@ -499,6 +499,45 @@ class Database:
             """, (round_id,))
             return [row[0] for row in cur.fetchall()]
     
+    def get_user_photo_in_round(self, user_id: int, round_id: int):
+        """Получить фото пользователя в раунде"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM photos
+                WHERE user_id = %s AND round_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id, round_id))
+            return cur.fetchone()
+    
+    def get_battle_by_photo(self, photo_id: int):
+        """Получить батл по ID фото"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM battles
+                WHERE photo1_id = %s OR photo2_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (photo_id, photo_id))
+            return cur.fetchone()
+    
+    def use_extra_votes(self, user_id: int, photo_id: int, votes_count: int):
+        """Использовать дополнительные голоса на свое фото"""
+        with self.conn.cursor() as cur:
+            # Убираем голоса у пользователя
+            cur.execute("""
+                UPDATE users
+                SET extra_votes = GREATEST(extra_votes - %s, 0)
+                WHERE telegram_id = %s
+            """, (votes_count, user_id))
+            
+            # Добавляем голоса к фото
+            cur.execute("""
+                UPDATE photos
+                SET votes = votes + %s
+                WHERE id = %s
+            """, (votes_count, photo_id))
+    
     def get_bot_stats(self):
         """Общая статистика бота"""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
