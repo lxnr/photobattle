@@ -24,6 +24,15 @@ class Database:
     def create_tables(self):
         """Создание всех таблиц БД"""
         with self.conn.cursor() as cur:
+            # Таблица для хранения ID сообщений батлов
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS battle_messages (
+                    id SERIAL PRIMARY KEY,
+                    battle_id INTEGER REFERENCES battles(id),
+                    message_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             # Таблица пользователей
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -103,6 +112,17 @@ class Database:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_battles_round ON battles(round_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_battle ON votes(battle_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_user ON votes(user_id)")
+            
+            # Таблица для хранения ID сообщений батлов
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS battle_messages (
+                    id SERIAL PRIMARY KEY,
+                    battle_id INTEGER REFERENCES battles(id),
+                    message_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_battle_messages ON battle_messages(battle_id)")
     
     def init_admins(self):
         """Инициализация начальных админов из config"""
@@ -444,6 +464,40 @@ class Database:
                 'wins': wins,
                 'extra_votes': extra_votes
             }
+    
+    def get_round_by_id(self, round_id: int):
+        """Получить раунд по ID"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM rounds WHERE id = %s", (round_id,))
+            return cur.fetchone()
+    
+    def save_battle_messages(self, battle_id: int, message_ids: list):
+        """Сохранить ID сообщений батла"""
+        with self.conn.cursor() as cur:
+            for msg_id in message_ids:
+                cur.execute("""
+                    INSERT INTO battle_messages (battle_id, message_id)
+                    VALUES (%s, %s)
+                """, (battle_id, msg_id))
+    
+    def add_battle_message(self, battle_id: int, message_id: int):
+        """Добавить ID сообщения батла"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO battle_messages (battle_id, message_id)
+                VALUES (%s, %s)
+            """, (battle_id, message_id))
+    
+    def get_round_messages(self, round_id: int):
+        """Получить все ID сообщений раунда"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT bm.message_id
+                FROM battle_messages bm
+                JOIN battles b ON b.id = bm.battle_id
+                WHERE b.round_id = %s
+            """, (round_id,))
+            return [row[0] for row in cur.fetchall()]
     
     def get_bot_stats(self):
         """Общая статистика бота"""
