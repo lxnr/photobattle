@@ -23,5 +23,4 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', 'postgres')
 
 # Настройки батла
 MIN_VOTES = int(os.getenv('MIN_VOTES', '8'))  # Минимум голосов для прохода в след раунд
-MAX_PAIRS = int(os.getenv('MAX_PAIRS', '10'))  # Максимум пар в раунде
 VOTES_PER_REFERRAL = int(os.getenv('VOTES_PER_REFERRAL', '3'))  # Голосов за 1 реферала
