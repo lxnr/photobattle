@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ChatMember
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -42,8 +42,19 @@ class PhotoBattleBot:
         # Обработка фото
         self.app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         
+        # Обработка текстовых сообщений (для меню)
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+        
         # Callback кнопки
         self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+    
+    def get_main_menu(self):
+        """Создает главное меню с кнопками внизу"""
+        keyboard = [
+            [KeyboardButton("🔥 принять участие"), KeyboardButton("🎤 получить голоса")],
+            [KeyboardButton("👤 профиль"), KeyboardButton("💬 помощь")]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     async def check_subscription(self, user_id: int) -> bool:
         """Проверка подписки на канал"""
@@ -64,7 +75,7 @@ class PhotoBattleBot:
             try:
                 referrer_id = int(args[0].replace('ref', ''))
                 if referrer_id == user.id:
-                    referrer_id = None  # Нельзя быть рефералом самому себе
+                    referrer_id = None
             except ValueError:
                 pass
         
@@ -88,14 +99,100 @@ class PhotoBattleBot:
 За каждого реферала, который отправит фото, ты получишь 3 голоса.
 """
         
-        keyboard = [
-            [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
-            [InlineKeyboardButton("📖 Правила", callback_data="rules")],
-            [InlineKeyboardButton("📢 Канал с батлами", url=config.CHANNEL_LINK)]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(welcome_text, reply_markup=self.get_main_menu())
+    
+    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстовых сообщений из меню"""
+        text = update.message.text
+        user_id = update.effective_user.id
         
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+        if text == "🔥 принять участие":
+            current_round = db.get_current_round()
+            if not current_round or current_round['status'] != 'active':
+                await update.message.reply_text(
+                    "❌ Сейчас нет активного раунда. Дождись начала нового батла!",
+                    reply_markup=self.get_main_menu()
+                )
+            else:
+                await update.message.reply_text(
+                    "📸 Отправь свое фото для участия в батле!\n\n"
+                    "Требования:\n"
+                    "• Видно лицо\n"
+                    "• Вертикальное или квадратное фото\n"
+                    "• Только собственное фото",
+                    reply_markup=self.get_main_menu()
+                )
+        
+        elif text == "🎤 получить голоса":
+            ref_link = f"https://t.me/{config.BOT_USERNAME}?start=ref{user_id}"
+            user_stats = db.get_user_stats(user_id)
+            
+            votes_text = f"""
+🎤 Голоса для фотобатла можно получить двумя способами:
+
+1️⃣ Пригласи друзей принять участие в фотобатле через твою ссылку (указана ниже). Если их заявка будет одобрена, ты получишь 3 голоса 🎤
+
+2️⃣ Приобрети голоса за деньги (1 голос = 5₽)
+
+📊 У тебя сейчас: {user_stats['extra_votes']} дополнительных голосов
+
+🔗 Твоя реферальная ссылка:
+{ref_link}
+
+💡 Чем больше голосов - тем выше твои шансы на победу!
+"""
+            keyboard = [
+                [InlineKeyboardButton("💳 купить голоса", callback_data="buy_votes")]
+            ]
+            await update.message.reply_text(
+                votes_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        elif text == "👤 профиль":
+            user_stats = db.get_user_stats(user_id)
+            ref_link = f"https://t.me/{config.BOT_USERNAME}?start=ref{user_id}"
+            
+            profile_text = f"""
+👤 Твой профиль:
+
+🏆 Выиграно фотобатлов: {user_stats['wins']}
+📸 Сыграно фотобатлов: {user_stats['played']}
+🔥 Приглашено активных рефералов: {user_stats['active_referrals']}
+
+📊 Дополнительных голосов: {user_stats['extra_votes']}
+
+🔗 Твоя реферальная ссылка:
+{ref_link}
+
+💡 Реферал становится активным после отправки фото
+"""
+            await update.message.reply_text(profile_text, reply_markup=self.get_main_menu())
+        
+        elif text == "💬 помощь":
+            help_text = """
+💬 ПОМОЩЬ И ПРАВИЛА
+
+📖 Правила фотобатла:
+1️⃣ Отправь свою фотографию где видно лицо
+2️⃣ Фото должно быть вертикальным или квадратным
+3️⃣ Используй только собственные изображения
+4️⃣ Админы проверят и одобрят твое фото
+5️⃣ Батл проходит между двумя фото
+6️⃣ Побеждает фото с большим количеством голосов
+7️⃣ Для прохода в следующий раунд нужно минимум 8 голосов
+
+🔔 Для голосования нужно быть подписанным на канал
+
+❓ Вопросы? Напиши админу: @admin
+"""
+            keyboard = [
+                [InlineKeyboardButton("📢 Канал с батлами", url=config.CHANNEL_LINK)]
+            ]
+            await update.message.reply_text(
+                help_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
     
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка присланных фото"""
@@ -106,14 +203,16 @@ class PhotoBattleBot:
         current_round = db.get_current_round()
         if not current_round or current_round['status'] != 'active':
             await update.message.reply_text(
-                "❌ Сейчас нет активного раунда. Дождись начала нового батла!"
+                "❌ Сейчас нет активного раунда. Дождись начала нового батла!",
+                reply_markup=self.get_main_menu()
             )
             return
         
         # Проверка: не отправлял ли уже фото в этом раунде
         if db.user_has_photo_in_round(user.id, current_round['id']):
             await update.message.reply_text(
-                "❌ Ты уже отправил фото в этом раунде!"
+                "❌ Ты уже отправил фото в этом раунде!",
+                reply_markup=self.get_main_menu()
             )
             return
         
@@ -127,14 +226,14 @@ class PhotoBattleBot:
         # Если это реферал и первое фото - начисляем голоса рефереру
         user_data = db.get_user(user.id)
         if user_data and user_data['referrer_id']:
-            # Проверяем, первое ли это фото пользователя
             user_photos_count = db.count_user_photos(user.id)
-            if user_photos_count == 1:  # Первое фото
+            if user_photos_count == 1:
                 db.add_referral_votes(user_data['referrer_id'], config.VOTES_PER_REFERRAL)
         
         await update.message.reply_text(
             "✅ Фотография отправлена на модерацию!\n\n"
-            "🏁 Бот сообщит о начале фотобатла, так что не блокируй его"
+            "🏁 Бот сообщит о начале фотобатла, так что не блокируй его",
+            reply_markup=self.get_main_menu()
         )
         
         # Отправляем фото админам на модерацию
@@ -169,6 +268,41 @@ class PhotoBattleBot:
             except Exception as e:
                 logger.error(f"Ошибка отправки фото админу {admin_id}: {e}")
     
+    async def check_and_publish_battles(self, round_id: int):
+        """Проверка и автоматическая публикация батлов при наборе пар"""
+        # Получаем одобренные фото которые еще не в батлах
+        approved_photos = db.get_unpaired_photos(round_id)
+        
+        # Проверяем сколько пар можно создать
+        pairs_count = len(approved_photos) // 2
+        
+        if pairs_count == 0:
+            return
+        
+        # Получаем сколько уже есть пар в этом раунде
+        existing_battles = db.count_battles_in_round(round_id)
+        
+        # Максимум 10 пар
+        if existing_battles >= config.MAX_PAIRS:
+            return
+        
+        # Сколько еще можем создать пар
+        available_slots = config.MAX_PAIRS - existing_battles
+        pairs_to_create = min(pairs_count, available_slots)
+        
+        # Создаем и публикуем пары
+        import random
+        random.shuffle(approved_photos)
+        
+        for i in range(pairs_to_create):
+            photo1 = approved_photos[i * 2]
+            photo2 = approved_photos[i * 2 + 1]
+            
+            battle_id = db.create_battle(round_id, photo1['id'], photo2['id'])
+            await self.publish_battle(battle_id, photo1, photo2)
+            
+            logger.info(f"Автоматически создан батл #{battle_id}")
+    
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка нажатий на кнопки"""
         query = update.callback_query
@@ -192,6 +326,11 @@ class PhotoBattleBot:
                     caption=query.message.caption + "\n\n✅ ОДОБРЕНО"
                 )
                 
+                # Проверяем можем ли создать новые батлы
+                photo = db.get_photo_by_id(photo_id)
+                if photo:
+                    await self.check_and_publish_battles(photo['round_id'])
+                
             else:  # reject
                 db.update_photo_status(photo_id, 'rejected')
                 await query.edit_message_caption(
@@ -207,7 +346,6 @@ class PhotoBattleBot:
             # Проверка подписки на канал
             is_subscribed = await self.check_subscription(user_id)
             if not is_subscribed:
-                keyboard = [[InlineKeyboardButton("📢 Подписаться на канал", url=config.CHANNEL_LINK)]]
                 await query.answer(
                     "❌ Чтобы голосовать, нужно подписаться на канал!",
                     show_alert=True
@@ -236,55 +374,34 @@ class PhotoBattleBot:
             # Обновляем счетчик голосов через минуту
             asyncio.create_task(self.update_vote_count_delayed(battle_id, query.message))
         
-        # Профиль пользователя
-        elif data == 'profile':
-            user_stats = db.get_user_stats(user_id)
+        # Покупка голосов
+        elif data == 'buy_votes':
+            await query.answer("Функция в разработке", show_alert=True)
+        
+        # Кнопка "Назад"
+        elif data == 'back_to_start':
             ref_link = f"https://t.me/{config.BOT_USERNAME}?start=ref{user_id}"
             
-            profile_text = f"""
-👤 Твой профиль:
+            welcome_text = f"""
+👋 Привет! Здесь ты можешь принять участие в фотобатле!
 
-🏆 Выиграно фотобатлов: {user_stats['wins']}
-📸 Сыграно фотобатлов: {user_stats['played']}
-🔥 Приглашено активных рефералов: {user_stats['active_referrals']}
+📸 Чтобы участвовать, просто отправь мне свою фотографию где видно лицо, которая должна быть вертикальной или квадратной.
 
-📊 Дополнительных голосов: {user_stats['extra_votes']}
+❗️ Используй только собственные изображения
 
-🔗 Твоя реферальная ссылка:
+🔥 Твоя реферальная ссылка:
 {ref_link}
 
-💡 Реферал становится активным после отправки фото
+📊 Пригласи друзей и получи дополнительные голоса!
 """
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
-            await query.edit_message_text(profile_text, reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        # Правила
-        elif data == 'rules':
-            rules_text = """
-📖 ПРАВИЛА ФОТОБАТЛА:
-
-1️⃣ Отправь свою фотографию где видно лицо
-2️⃣ Фото должно быть вертикальным или квадратным
-3️⃣ Используй только собственные изображения
-4️⃣ Админы проверят и одобрят твое фото
-5️⃣ Когда наберется минимум 8 участников, начнется батл
-6️⃣ Батл проходит между двумя фото - побеждает та, что наберет больше голосов
-7️⃣ Чтобы пройти в следующий раунд, нужно набрать минимум 8 голосов
-8️⃣ Приглашай друзей по реферальной ссылке - за каждого друга, который отправит фото, получишь 3 голоса!
-
-🔔 Для голосования нужно быть подписанным на канал
-
-Удачи! 🔥
-"""
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
-            await query.edit_message_text(rules_text, reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        elif data == 'back_to_start':
-            await self.start_command(update, context)
+            try:
+                await query.edit_message_text(welcome_text)
+            except:
+                await query.message.reply_text(welcome_text, reply_markup=self.get_main_menu())
     
     async def update_vote_count_delayed(self, battle_id: int, message):
         """Обновление счетчика голосов через минуту"""
-        await asyncio.sleep(60)  # Ждем минуту
+        await asyncio.sleep(60)
         
         try:
             votes = db.get_battle_votes(battle_id)
@@ -319,6 +436,7 @@ class PhotoBattleBot:
         current_round = db.get_current_round()
         pending_count = db.count_photos_by_status('pending', current_round['id'] if current_round else None)
         approved_count = db.count_photos_by_status('approved', current_round['id'] if current_round else None)
+        battles_count = db.count_battles_in_round(current_round['id']) if current_round else 0
         
         admin_text = f"""
 👑 АДМИН-ПАНЕЛЬ
@@ -326,6 +444,7 @@ class PhotoBattleBot:
 📊 Текущий раунд: {current_round['number'] if current_round else 'Не создан'}
 📸 На модерации: {pending_count}
 ✅ Одобрено фото: {approved_count}
+⚔️ Опубликовано пар: {battles_count}/{config.MAX_PAIRS}
 
 Команды:
 /start_round - Начать 1 раунд батла (набор фото)
@@ -346,16 +465,13 @@ class PhotoBattleBot:
         if not db.is_admin(user_id):
             return
         
-        # Проверяем, нет ли уже активного раунда
         current_round = db.get_current_round()
         if current_round:
             await update.message.reply_text("❌ Уже есть активный раунд! Сначала завершите его командой /end_battle")
             return
         
-        # Создаем новый раунд (номер 1)
         round_id = db.create_round(round_number=1)
         
-        # Уведомляем всех пользователей
         users = db.get_all_users()
         message_text = """
 🔥 Начался новый раунд фотобатла!
@@ -366,7 +482,11 @@ class PhotoBattleBot:
         
         for user in users:
             try:
-                await self.app.bot.send_message(chat_id=user['telegram_id'], text=message_text)
+                await self.app.bot.send_message(
+                    chat_id=user['telegram_id'], 
+                    text=message_text,
+                    reply_markup=self.get_main_menu()
+                )
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {user['telegram_id']}: {e}")
         
@@ -384,7 +504,6 @@ class PhotoBattleBot:
             await update.message.reply_text("❌ Нет активного раунда!")
             return
         
-        # Получаем победителей текущего раунда
         winners = db.get_round_winners(current_round['id'], min_votes=config.MIN_VOTES)
         
         if len(winners) < 2:
@@ -393,14 +512,11 @@ class PhotoBattleBot:
             )
             return
         
-        # Завершаем текущий раунд
         db.end_round(current_round['id'])
         
-        # Создаем новый раунд
         next_round_number = current_round['number'] + 1
         new_round_id = db.create_round(round_number=next_round_number)
         
-        # Публикуем батлы с победителями
         await self.publish_battles_from_winners(new_round_id, winners)
         
         await update.message.reply_text(
@@ -425,39 +541,44 @@ class PhotoBattleBot:
         """Публикация батла в канал"""
         keyboard = [
             [
-                InlineKeyboardButton("◀️ Лево", callback_data=f"vote_{battle_id}_{photo1['id']}"),
-                InlineKeyboardButton("Право ▶️", callback_data=f"vote_{battle_id}_{photo2['id']}")
-            ],
-            [InlineKeyboardButton("🔍 Найти себя", url=f"https://t.me/{config.BOT_USERNAME}")]
+                InlineKeyboardButton("лево 4", callback_data=f"vote_{battle_id}_{photo1['id']}"),
+                InlineKeyboardButton("право 4", callback_data=f"vote_{battle_id}_{photo2['id']}")
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         caption = f"""
-🔥 ФОТОБАТЛ №{battle_id}
+🔥 ФОТОБАТЛЫ
 
-◀️ Лево: 0 голосов
-Право ▶️: 0 голосов
+⚜️ 1 раунд
+💰 ПРИЗ: 777₽ или 350⭐
 
-Голосуй за лучшее фото!
+👉ссылка для голосования👈
+
+🗣 нужно собрать минимум 8 голосов
+
+✨нажми, чтобы принять участие
+
+🧑‍💼 итоги завтра в 14:00 по МСК
 """
         
         try:
-            # Отправляем первое фото с кнопками
+            # Отправляем первое фото
+            await self.app.bot.send_photo(
+                chat_id=config.CHANNEL_ID,
+                photo=photo1['file_id']
+            )
+            
+            # Отправляем второе фото с кнопками
             message = await self.app.bot.send_photo(
                 chat_id=config.CHANNEL_ID,
-                photo=photo1['file_id'],
+                photo=photo2['file_id'],
                 caption=caption,
                 reply_markup=reply_markup
             )
             
-            # Отправляем второе фото
-            await self.app.bot.send_photo(
-                chat_id=config.CHANNEL_ID,
-                photo=photo2['file_id']
-            )
-            
-            # Сохраняем message_id для обновления счетчика
             db.update_battle_message_id(battle_id, message.message_id)
+            logger.info(f"Опубликован батл #{battle_id} в канале")
         except Exception as e:
             logger.error(f"Ошибка публикации батла: {e}")
     
@@ -473,13 +594,10 @@ class PhotoBattleBot:
             await update.message.reply_text("❌ Нет активного раунда!")
             return
         
-        # Получаем финальных победителей
         winners = db.get_round_winners(current_round['id'], min_votes=config.MIN_VOTES)
         
-        # Завершаем раунд
         db.end_round(current_round['id'])
         
-        # Формируем сообщение с результатами
         result_text = f"🏆 Фотобатл завершен!\n\n"
         
         if winners:
@@ -493,12 +611,12 @@ class PhotoBattleBot:
         
         await update.message.reply_text(result_text)
         
-        # Уведомляем победителей
         for winner in winners:
             try:
                 await self.app.bot.send_message(
                     chat_id=winner['user_id'],
-                    text=f"🎉 Поздравляем! Ты прошел в финал с {winner['votes']} голосами!"
+                    text=f"🎉 Поздравляем! Ты прошел в финал с {winner['votes']} голосами!",
+                    reply_markup=self.get_main_menu()
                 )
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления победителю: {e}")
