@@ -8,7 +8,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '7796078474:AAE7JfMHeZEjyl9yhW8CwSK3NvHlEOZYb
 BOT_USERNAME = 'photobattl3bot'
 
 # Админы (можно добавлять через запятую)
-ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '1164427393', '693606819').split(',')]
+ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '1164427393').split(',')]
 
 # Канал для публикации батлов
 CHANNEL_ID = os.getenv('CHANNEL_ID', '@photozalupa1488')
