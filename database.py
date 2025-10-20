@@ -24,15 +24,6 @@ class Database:
     def create_tables(self):
         """Создание всех таблиц БД"""
         with self.conn.cursor() as cur:
-            # Таблица для хранения ID сообщений батлов
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS battle_messages (
-                    id SERIAL PRIMARY KEY,
-                    battle_id INTEGER REFERENCES battles(id),
-                    message_id BIGINT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
             # Таблица пользователей
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -75,6 +66,7 @@ class Database:
                     round_id INTEGER REFERENCES rounds(id),
                     status VARCHAR(50) DEFAULT 'pending',
                     votes INTEGER DEFAULT 0,
+                    is_queue BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
@@ -106,13 +98,6 @@ class Database:
                 )
             """)
             
-            # Индексы для оптимизации
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_round ON photos(round_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_battles_round ON battles(round_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_battle ON votes(battle_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_user ON votes(user_id)")
-            
             # Таблица для хранения ID сообщений батлов
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS battle_messages (
@@ -122,6 +107,14 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # Индексы для оптимизации
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_round ON photos(round_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_queue ON photos(is_queue)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_battles_round ON battles(round_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_battle ON votes(battle_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_user ON votes(user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_battle_messages ON battle_messages(battle_id)")
     
     def init_admins(self):
@@ -250,11 +243,39 @@ class Database:
         """Добавить фото на модерацию"""
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO photos (user_id, file_id, round_id, status)
-                VALUES (%s, %s, %s, 'pending')
+                INSERT INTO photos (user_id, file_id, round_id, status, is_queue)
+                VALUES (%s, %s, %s, 'pending', FALSE)
                 RETURNING id
             """, (user_id, file_id, round_id))
             return cur.fetchone()[0]
+    
+    def add_photo_to_queue(self, user_id: int, file_id: str):
+        """Добавить фото в очередь (без раунда)"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO photos (user_id, file_id, status, is_queue)
+                VALUES (%s, %s, 'pending', TRUE)
+                RETURNING id
+            """, (user_id, file_id))
+            return cur.fetchone()[0]
+    
+    def user_has_photo_in_queue(self, user_id: int):
+        """Проверить, есть ли у пользователя фото в очереди"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM photos
+                WHERE user_id = %s AND is_queue = TRUE AND status != 'rejected'
+            """, (user_id,))
+            return cur.fetchone()[0] > 0
+    
+    def move_queue_to_round(self, round_id: int):
+        """Перенести фото из очереди в раунд"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE photos
+                SET round_id = %s, is_queue = FALSE
+                WHERE is_queue = TRUE AND status = 'approved'
+            """, (round_id,))
     
     def get_photo_by_id(self, photo_id: int):
         """Получить фото по ID"""
@@ -341,6 +362,14 @@ class Database:
                 ORDER BY id
             """, (round_id,))
             return cur.fetchall()
+    
+    def get_battle_by_id(self, battle_id: int):
+        """Получить батл по ID"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM battles WHERE id = %s
+            """, (battle_id,))
+            return cur.fetchone()
     
     def create_battle(self, round_id: int, photo1_id: int, photo2_id: int):
         """Создать батл между двумя фото"""
