@@ -66,11 +66,19 @@ class Database:
                     round_id INTEGER REFERENCES rounds(id),
                     status VARCHAR(50) DEFAULT 'pending',
                     votes INTEGER DEFAULT 0,
-                    is_queue BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             """)
+            
+            # Миграция: добавляем колонку is_queue если её нет
+            try:
+                cur.execute("""
+                    ALTER TABLE photos 
+                    ADD COLUMN IF NOT EXISTS is_queue BOOLEAN DEFAULT FALSE
+                """)
+            except Exception as e:
+                print(f"⚠️ Колонка is_queue уже существует или ошибка: {e}")
             
             # Таблица батлов
             cur.execute("""
@@ -111,11 +119,16 @@ class Database:
             # Индексы для оптимизации
             cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_round ON photos(round_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_queue ON photos(is_queue)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_battles_round ON battles(round_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_battle ON votes(battle_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_user ON votes(user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_battle_messages ON battle_messages(battle_id)")
+            
+            # Создаем индекс для is_queue после добавления колонки
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_photos_queue ON photos(is_queue)")
+            except Exception as e:
+                print(f"⚠️ Индекс idx_photos_queue уже существует или ошибка: {e}")
     
     def init_admins(self):
         """Инициализация начальных админов из config"""
