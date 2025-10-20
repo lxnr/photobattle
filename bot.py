@@ -13,6 +13,7 @@ from database import Database
 import config
 import asyncio
 from datetime import datetime, timedelta
+import pytz
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,6 +25,9 @@ db = Database()
 
 # Глобальная переменная для приза
 CURRENT_PRIZE = "777₽ или 350⭐"
+
+# Часовой пояс Москвы
+MSK = pytz.timezone('Europe/Moscow')
 
 class PhotoBattleBot:
     def __init__(self):
@@ -205,7 +209,7 @@ class PhotoBattleBot:
 3️⃣ Админы проверят и одобрят твое фото
 4️⃣ Батл проходит между двумя фото
 5️⃣ Побеждает фото с большим количеством голосов
-6️⃣ Для прохода в следующий раунд нужно минимум 8 голосов
+6️⃣ Для прохода в следующий раунд нужно минимум 8 голосов в первом раунде, +8 в каждом следующем
 
 🔔 Для голосования нужно быть подписанным на канал
 
@@ -306,6 +310,13 @@ class PhotoBattleBot:
             import random
             random.shuffle(unpaired_photos)
             
+            # Устанавливаем время окончания раунда при публикации первого батла
+            if round_id not in self.round_end_times:
+                # Время окончания через 2 часа по МСК
+                end_time = datetime.now(MSK) + timedelta(hours=2)
+                self.round_end_times[round_id] = end_time
+                logger.info(f"Установлено время окончания раунда {round_id}: {end_time.strftime('%H:%M')} МСК")
+            
             for i in range(pairs_count):
                 photo1 = unpaired_photos[i * 2]
                 photo2 = unpaired_photos[i * 2 + 1]
@@ -325,13 +336,14 @@ class PhotoBattleBot:
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка нажатий на кнопки"""
         query = update.callback_query
-        await query.answer()
         
         user_id = query.from_user.id
         data = query.data
         
         # Использование голосов
         if data == 'use_votes':
+            await query.answer()
+            
             current_round = db.get_current_round()
             if not current_round:
                 await query.answer("Нет активного раунда", show_alert=True)
@@ -370,6 +382,8 @@ class PhotoBattleBot:
         
         # Админские кнопки
         if data.startswith('admin_'):
+            await query.answer()
+            
             if not db.is_admin(user_id):
                 await query.answer("❌ Доступно только админам!", show_alert=True)
                 return
@@ -396,6 +410,8 @@ class PhotoBattleBot:
         
         # Модерация фото
         if data.startswith(('approve_', 'reject_')):
+            await query.answer()
+            
             if not db.is_admin(user_id):
                 await query.answer("❌ Доступно только админам!", show_alert=True)
                 return
@@ -432,13 +448,11 @@ class PhotoBattleBot:
                 await query.edit_message_caption(
                     caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО"
                 )
+            return
         
         # Голосование
-        elif data.startswith('vote_'):
-            parts = data.split('_')
-            battle_id = int(parts[1])
-            photo_id = int(parts[2])
-            
+        if data.startswith('vote_'):
+            # Сначала проверяем подписку
             is_subscribed = await self.check_subscription(user_id)
             if not is_subscribed:
                 await query.answer(
@@ -447,23 +461,36 @@ class PhotoBattleBot:
                 )
                 return
             
+            parts = data.split('_')
+            battle_id = int(parts[1])
+            photo_id = int(parts[2])
+            
+            # Проверяем, голосовал ли уже
             if db.user_voted_in_battle(user_id, battle_id):
                 await query.answer(
-                    "❌ Вы уже проголосовали в этом батле",
+                    "❌ Вы уже проголосовали в этом батле!",
                     show_alert=True
                 )
                 return
             
+            # Добавляем голос
             success = db.add_vote(user_id, battle_id, photo_id)
             
             if success:
+                # Обновляем кнопки
                 votes = db.get_battle_votes(battle_id)
                 await self.update_battle_buttons(battle_id, query.message.message_id, votes, int(parts[2]), int(parts[3]))
                 
+                # Уведомление об успешном голосовании
                 await query.answer(
-                    "🔥 Голос учтён\n\n"
+                    "🔥 Голос учтён!\n\n"
                     "❗️ При отписке от канала голос не будет засчитан\n\n"
                     "⏱ Голос зачислится в течение минуты",
+                    show_alert=True
+                )
+            else:
+                await query.answer(
+                    "❌ Ошибка при голосовании. Попробуйте снова.",
                     show_alert=True
                 )
     
@@ -491,6 +518,9 @@ class PhotoBattleBot:
             current_round = db.get_round_by_id(round_id)
             round_number = current_round['number'] if current_round else 1
             
+            # Минимальные голоса для этого раунда
+            min_votes_required = config.MIN_VOTES * round_number
+            
             # Время окончания раунда
             end_time = self.round_end_times.get(round_id)
             if end_time:
@@ -499,6 +529,7 @@ class PhotoBattleBot:
                 time_str = "скоро"
             
             # Отправляем 2 фото одним сообщением (медиа-группа)
+            # photo1 будет СЛЕВА, photo2 будет СПРАВА
             media = [
                 InputMediaPhoto(media=photo1['file_id']),
                 InputMediaPhoto(media=photo2['file_id'])
@@ -514,6 +545,7 @@ class PhotoBattleBot:
                 db.add_battle_message(battle_id, msg.message_id)
             
             # Отправляем сообщение с кнопками
+            # Кнопка "лево" голосует за photo1, "право" за photo2
             keyboard = [
                 [
                     InlineKeyboardButton("лево", callback_data=f"vote_{battle_id}_{photo1['id']}_{photo2['id']}"),
@@ -529,7 +561,7 @@ class PhotoBattleBot:
 
 👉<a href="https://t.me/{config.BOT_USERNAME}">ссылка для голосования</a>👈
 
-🗣 нужно собрать минимум 8 голосов
+🗣 нужно собрать минимум {min_votes_required} голосов
 
 ✨<a href="https://t.me/{config.BOT_USERNAME}">нажми, чтобы принять участие</a>
 
@@ -600,9 +632,7 @@ class PhotoBattleBot:
         round_id = db.create_round(round_number=1)
         logger.info(f"Создан раунд #{round_id}")
         
-        # Время окончания раунда
-        end_time = datetime.now() + timedelta(hours=2)
-        self.round_end_times[round_id] = end_time
+        # Время окончания раунда будет установлено при публикации первого батла
         
         # Запускаем таймер
         task = asyncio.create_task(self.round_timer(round_id, hours=2))
@@ -620,7 +650,6 @@ class PhotoBattleBot:
         users = db.get_all_users()
         for user in users:
             try:
-                # Создаем кнопку для пользователя
                 keyboard = [[InlineKeyboardButton("🔍 найти себя", url=f"https://t.me/{config.BOT_USERNAME}")]]
                 
                 await self.app.bot.send_message(
@@ -631,7 +660,7 @@ class PhotoBattleBot:
             except:
                 pass
         
-        msg = f"✅ Раунд 1 начат! Окончание: {end_time.strftime('%H:%M')}"
+        msg = f"✅ Раунд 1 начат! Продолжительность: 2 часа с момента публикации первого батла"
         if update.message:
             await update.message.reply_text(msg)
         elif update.callback_query:
@@ -656,7 +685,10 @@ class PhotoBattleBot:
             if not current_round:
                 return
             
-            winners = db.get_round_winners(round_id, min_votes=config.MIN_VOTES)
+            # Минимальные голоса для прохода в этом раунде
+            min_votes_required = config.MIN_VOTES * current_round['number']
+            
+            winners = db.get_round_winners(round_id, min_votes=min_votes_required)
             
             if len(winners) < 2:
                 logger.info(f"Недостаточно победителей в раунде {round_id}")
@@ -694,9 +726,8 @@ class PhotoBattleBot:
             next_round_number = current_round['number'] + 1
             new_round_id = db.create_round(round_number=next_round_number)
             
-            # Время окончания
-            end_time = datetime.now() + timedelta(hours=2)
-            self.round_end_times[new_round_id] = end_time
+            # Минимальные голоса для следующего раунда
+            next_min_votes = config.MIN_VOTES * next_round_number
             
             task = asyncio.create_task(self.round_timer(new_round_id, hours=2))
             self.round_tasks[new_round_id] = task
@@ -705,7 +736,7 @@ class PhotoBattleBot:
             notification_text = f"""
 ▶️ {next_round_number} раунд фотобатла начался
 
-❗️ нужно собрать минимум 8 голосов и обогнать соперника, чтобы пройти в следующий раунд
+❗️ нужно собрать минимум {next_min_votes} голосов и обогнать соперника, чтобы пройти в следующий раунд
 
 📝 Чтобы увеличить свои шансы на победу, попроси друзей проголосовать за тебя
 """
@@ -804,7 +835,8 @@ class PhotoBattleBot:
         if current_round['id'] in self.round_tasks:
             self.round_tasks[current_round['id']].cancel()
         
-        winners = db.get_round_winners(current_round['id'], min_votes=config.MIN_VOTES)
+        min_votes_required = config.MIN_VOTES * current_round['number']
+        winners = db.get_round_winners(current_round['id'], min_votes=min_votes_required)
         db.end_round(current_round['id'])
         await self.delete_round_messages(current_round['id'])
         
