@@ -554,7 +554,7 @@ class PhotoBattleBot:
             ]
             
             caption = f"""
-🔥 ФОТОБАТЛЫ
+🔥 МОНСТРЫ ТТ
 
 ⚜️ {round_number} раунд
 💰 ПРИЗ: {CURRENT_PRIZE}
