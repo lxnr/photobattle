@@ -209,7 +209,7 @@ class PhotoBattleBot:
 3️⃣ Админы проверят и одобрят твое фото
 4️⃣ Батл проходит между двумя фото
 5️⃣ Побеждает фото с большим количеством голосов
-6️⃣ Для прохода в следующий раунд нужно минимум 8 голосов в первом раунде, +8 в каждом следующем
+6️⃣ Для прохода в следующий раунд нужно победить в своей паре
 
 🔔 Для голосования нужно быть подписанным на канал
 
@@ -554,7 +554,7 @@ class PhotoBattleBot:
             ]
             
             caption = f"""
-🔥 МОНСТРЫ ТТ
+🔥 ФОТОБАТЛЫ
 
 ⚜️ {round_number} раунд
 💰 ПРИЗ: {CURRENT_PRIZE}
@@ -642,7 +642,7 @@ class PhotoBattleBot:
         notification_text = f"""
 ▶️ 1 раунд фотобатла начался
 
-❗️ нужно собрать минимум 8 голосов и обогнать соперника, чтобы пройти в следующий раунд
+❗️ нужно собрать больше голосов чем у соперника, чтобы пройти в следующий раунд
 
 📝 Чтобы увеличить свои шансы на победу, попроси друзей проголосовать за тебя
 """
@@ -674,90 +674,72 @@ class PhotoBattleBot:
             current_round = db.get_round_by_id(round_id)
             if current_round and current_round['status'] == 'active':
                 logger.info(f"Таймер раунда {round_id} истек")
-                await self.auto_next_round(round_id)
+                # Таймер закончился, но раунд продолжается до действий админа
         except asyncio.CancelledError:
             logger.info(f"Таймер раунда {round_id} отменен")
     
-    async def auto_next_round(self, round_id: int):
-        """Автоматический переход к следующему раунду"""
-        try:
-            current_round = db.get_round_by_id(round_id)
-            if not current_round:
-                return
+    def get_battle_winners(self, round_id: int):
+        """Получить победителей батлов в раунде (по парам)"""
+        battles = db.get_round_battles(round_id)
+        winners = []
+        losers = []
+        
+        for battle in battles:
+            votes = db.get_battle_votes(battle['id'])
+            photo1 = db.get_photo_by_id(battle['photo1_id'])
+            photo2 = db.get_photo_by_id(battle['photo2_id'])
             
-            # Минимальные голоса для прохода в этом раунде
-            min_votes_required = config.MIN_VOTES * current_round['number']
-            
-            winners = db.get_round_winners(round_id, min_votes=min_votes_required)
-            
-            if len(winners) < 2:
-                logger.info(f"Недостаточно победителей в раунде {round_id}")
-                db.end_round(round_id)
-                return
-            
-            # Удаляем старые сообщения
-            await self.delete_round_messages(round_id)
-            
-            # Уведомляем победителей
-            for winner in winners:
-                try:
-                    await self.app.bot.send_message(
-                        chat_id=winner['user_id'],
-                        text=f"🎉 Поздравляем! Вы успешно выиграли {current_round['number']} раунд фотобатла",
-                        reply_markup=self.get_main_menu()
-                    )
-                except:
-                    pass
-            
-            # Финал
-            if len(winners) == 1:
-                db.end_round(round_id)
-                winner = winners[0]
-                await self.app.bot.send_message(
-                    chat_id=winner['user_id'],
-                    text=f"🏆 ПОЗДРАВЛЯЕМ! Вы победитель фотобатла!\n\n💰 Приз: {CURRENT_PRIZE}",
-                    reply_markup=self.get_main_menu()
-                )
-                logger.info(f"Финал! Победитель: {winner['user_id']}")
-                return
-            
-            # Следующий раунд
-            db.end_round(round_id)
-            next_round_number = current_round['number'] + 1
-            new_round_id = db.create_round(round_number=next_round_number)
-            
-            # Минимальные голоса для следующего раунда
-            next_min_votes = config.MIN_VOTES * next_round_number
-            
-            task = asyncio.create_task(self.round_timer(new_round_id, hours=2))
-            self.round_tasks[new_round_id] = task
-            
-            # Уведомление о новом раунде
-            notification_text = f"""
-▶️ {next_round_number} раунд фотобатла начался
-
-❗️ нужно собрать минимум {next_min_votes} голосов и обогнать соперника, чтобы пройти в следующий раунд
-
-📝 Чтобы увеличить свои шансы на победу, попроси друзей проголосовать за тебя
-"""
-            
-            for winner in winners:
-                try:
-                    keyboard = [[InlineKeyboardButton("🔍 найти себя", url=f"https://t.me/{config.BOT_USERNAME}")]]
-                    await self.app.bot.send_message(
-                        chat_id=winner['user_id'],
-                        text=notification_text,
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                except:
-                    pass
-            
-            await self.publish_battles_from_winners(new_round_id, winners)
-            
-            logger.info(f"Начат раунд {next_round_number}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка в auto_next_round: {e}", exc_info=True)
+            if votes['photo1'] > votes['photo2']:
+                # Победило первое фото
+                winners.append({
+                    **photo1,
+                    'votes': votes['photo1'],
+                    'battle_id': battle['id']
+                })
+                losers.append({
+                    **photo2,
+                    'votes': votes['photo2'],
+                    'battle_id': battle['id']
+                })
+            elif votes['photo2'] > votes['photo1']:
+                # Победило второе фото
+                winners.append({
+                    **photo2,
+                    'votes': votes['photo2'],
+                    'battle_id': battle['id']
+                })
+                losers.append({
+                    **photo1,
+                    'votes': votes['photo1'],
+                    'battle_id': battle['id']
+                })
+            else:
+                # Ничья - проходят оба (или выбираем случайно)
+                import random
+                if random.choice([True, False]):
+                    winners.append({
+                        **photo1,
+                        'votes': votes['photo1'],
+                        'battle_id': battle['id']
+                    })
+                    losers.append({
+                        **photo2,
+                        'votes': votes['photo2'],
+                        'battle_id': battle['id']
+                    })
+                else:
+                    winners.append({
+                        **photo2,
+                        'votes': votes['photo2'],
+                        'battle_id': battle['id']
+                    })
+                    losers.append({
+                        **photo1,
+                        'votes': votes['photo1'],
+                        'battle_id': battle['id']
+                    })
+        
+        return winners, losers
     
     async def delete_round_messages(self, round_id: int):
         """Удаление сообщений раунда"""
@@ -777,7 +759,7 @@ class PhotoBattleBot:
             logger.error(f"Ошибка удаления сообщений: {e}")
     
     async def next_round(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Следующий раунд вручную"""
+        """Следующий раунд (переход без завершения батла)"""
         user_id = update.effective_user.id if update.effective_user else None
         
         if user_id and not db.is_admin(user_id):
@@ -792,16 +774,95 @@ class PhotoBattleBot:
                 await update.callback_query.message.reply_text(msg)
             return
         
-        if current_round['id'] in self.round_tasks:
-            self.round_tasks[current_round['id']].cancel()
-        
-        await self.auto_next_round(current_round['id'])
-        
-        msg = "✅ Следующий раунд начат!"
-        if update.message:
-            await update.message.reply_text(msg)
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(msg)
+        try:
+            # Получаем победителей и проигравших текущего раунда
+            winners, losers = self.get_battle_winners(current_round['id'])
+            
+            logger.info(f"Раунд {current_round['number']}: победителей {len(winners)}, проигравших {len(losers)}")
+            
+            # Отправляем уведомления всем участникам
+            for winner in winners:
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=winner['user_id'],
+                        text=f"✅ Поздравляем! Твое фото прошло в следующий раунд!\n\n"
+                             f"📊 Ты набрал {winner['votes']} голосов и победил в своей паре!",
+                        reply_markup=self.get_main_menu()
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки уведомления победителю {winner['user_id']}: {e}")
+            
+            for loser in losers:
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=loser['user_id'],
+                        text=f"😔 К сожалению, твое фото не прошло в следующий раунд\n\n"
+                             f"📊 Ты набрал {loser['votes']} голосов, но соперник набрал больше\n\n"
+                             f"💪 Не расстраивайся! Участвуй в следующем батле!",
+                        reply_markup=self.get_main_menu()
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки уведомления проигравшему {loser['user_id']}: {e}")
+            
+            # Удаляем сообщения предыдущего раунда
+            await self.delete_round_messages(current_round['id'])
+            
+            # Проверяем, есть ли один победитель (финал)
+            if len(winners) == 1:
+                winner = winners[0]
+                db.end_round(current_round['id'])
+                
+                # Отправляем сообщение о победе в батле
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=winner['user_id'],
+                        text=f"🏆 ПОЗДРАВЛЯЕМ! ТЫ ПОБЕДИТЕЛЬ ФОТОБАТЛА!\n\n"
+                             f"💰 Твой приз: {CURRENT_PRIZE}\n\n"
+                             f"🎉 Свяжись с админом @lixxxer для получения приза!",
+                        reply_markup=self.get_main_menu()
+                    )
+                except:
+                    pass
+                
+                msg = f"✅ Батл завершен! Победитель: @{winner.get('username', 'Аноним')} ({winner['votes']} голосов)"
+                logger.info(f"Финал! Победитель: {winner['user_id']}")
+            
+            elif len(winners) < 2:
+                # Недостаточно участников для следующего раунда
+                db.end_round(current_round['id'])
+                msg = "⚠️ Недостаточно победителей для следующего раунда. Батл завершен."
+                logger.info(f"Недостаточно победителей в раунде {current_round['id']}")
+            
+            else:
+                # Создаем следующий раунд
+                next_round_number = current_round['number'] + 1
+                new_round_id = db.create_round(round_number=next_round_number)
+                
+                # Завершаем текущий раунд (но не батл)
+                db.update_round_status(current_round['id'], 'completed')
+                
+                # Запускаем таймер для нового раунда
+                task = asyncio.create_task(self.round_timer(new_round_id, hours=2))
+                self.round_tasks[new_round_id] = task
+                
+                # Публикуем новые батлы из победителей
+                await self.publish_battles_from_winners(new_round_id, winners)
+                
+                msg = f"✅ Раунд {next_round_number} начат! Участников: {len(winners)}"
+                logger.info(f"Начат раунд {next_round_number}")
+            
+            if update.message:
+                await update.message.reply_text(msg)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(msg)
+                
+        except Exception as e:
+            logger.error(f"Ошибка в next_round: {e}", exc_info=True)
+            msg = f"❌ Ошибка при переходе к следующему раунду: {e}"
+            if update.message:
+                await update.message.reply_text(msg)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(msg)
     
     async def publish_battles_from_winners(self, round_id: int, winners: list):
         """Публикация батлов из победителей"""
@@ -817,7 +878,7 @@ class PhotoBattleBot:
             await asyncio.sleep(2)
     
     async def end_battle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Завершить батл"""
+        """Завершить весь батл"""
         user_id = update.effective_user.id if update.effective_user else None
         
         if user_id and not db.is_admin(user_id):
@@ -832,24 +893,70 @@ class PhotoBattleBot:
                 await update.callback_query.message.reply_text(msg)
             return
         
-        if current_round['id'] in self.round_tasks:
-            self.round_tasks[current_round['id']].cancel()
-        
-        min_votes_required = config.MIN_VOTES * current_round['number']
-        winners = db.get_round_winners(current_round['id'], min_votes=min_votes_required)
-        db.end_round(current_round['id'])
-        await self.delete_round_messages(current_round['id'])
-        
-        result_text = f"🏆 Фотобатл завершен!\n\nПобедителей: {len(winners)}"
-        if winners:
-            result_text += "\n\nТоп:\n"
-            for idx, w in enumerate(winners[:10], 1):
-                result_text += f"{idx}. @{w.get('username', 'Аноним')} - {w['votes']} голосов\n"
-        
-        if update.message:
-            await update.message.reply_text(result_text)
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(result_text)
+        try:
+            # Отменяем таймер если есть
+            if current_round['id'] in self.round_tasks:
+                self.round_tasks[current_round['id']].cancel()
+            
+            # Получаем всех участников текущего раунда с их голосами
+            round_photos = db.get_round_photos_with_votes(current_round['id'])
+            
+            if not round_photos:
+                msg = "❌ Нет фото в текущем раунде"
+                if update.message:
+                    await update.message.reply_text(msg)
+                elif update.callback_query:
+                    await update.callback_query.message.reply_text(msg)
+                return
+            
+            # Сортируем по количеству голосов
+            round_photos.sort(key=lambda x: x['votes'], reverse=True)
+            winner = round_photos[0]
+            
+            # Завершаем раунд
+            db.end_round(current_round['id'])
+            
+            # Удаляем сообщения раунда
+            await self.delete_round_messages(current_round['id'])
+            
+            # Отправляем уведомление победителю
+            try:
+                await self.app.bot.send_message(
+                    chat_id=winner['user_id'],
+                    text=f"🏆 ПОЗДРАВЛЯЕМ! ТЫ ПОБЕДИТЕЛЬ ФОТОБАТЛА!\n\n"
+                         f"💰 Твой приз: {CURRENT_PRIZE}\n\n"
+                         f"📊 Ты набрал {winner['votes']} голосов!\n\n"
+                         f"🎉 Свяжись с админом @lixxxer для получения приза!",
+                    reply_markup=self.get_main_menu()
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления победителю: {e}")
+            
+            # Формируем результаты
+            result_text = f"🏆 Фотобатл завершен!\n\n"
+            result_text += f"👑 Победитель: @{winner.get('username', 'Аноним')}\n"
+            result_text += f"📊 Голосов: {winner['votes']}\n\n"
+            
+            if len(round_photos) > 1:
+                result_text += "Топ участников:\n"
+                for idx, photo in enumerate(round_photos[:10], 1):
+                    emoji = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}."
+                    result_text += f"{emoji} @{photo.get('username', 'Аноним')} - {photo['votes']} голосов\n"
+            
+            logger.info(f"Батл завершен. Победитель: {winner['user_id']}")
+            
+            if update.message:
+                await update.message.reply_text(result_text)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(result_text)
+                
+        except Exception as e:
+            logger.error(f"Ошибка в end_battle: {e}", exc_info=True)
+            msg = f"❌ Ошибка при завершении батла: {e}"
+            if update.message:
+                await update.message.reply_text(msg)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(msg)
     
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Статистика"""
