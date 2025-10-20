@@ -11,8 +11,8 @@ BOT_USERNAME = 'photobattl3bot'
 ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '1164427393').split(',')]
 
 # Канал для публикации батлов
-CHANNEL_ID = os.getenv('CHANNEL_ID', '@photozalupa1488')
-CHANNEL_LINK = os.getenv('CHANNEL_LINK', 'https://t.me/photozalupa1488')
+CHANNEL_ID = os.getenv('CHANNEL_ID', '@hrhdhsusisjdj')
+CHANNEL_LINK = os.getenv('CHANNEL_LINK', 'https://t.me/hrhdhsusisjdj')
 
 # База данных PostgreSQL
 DB_HOST = os.getenv('DB_HOST', 'localhost')
