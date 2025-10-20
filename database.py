@@ -237,6 +237,15 @@ class Database:
                 WHERE id = %s
             """, (round_id,))
     
+    def update_round_status(self, round_id: int, status: str):
+        """Обновить статус раунда"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE rounds 
+                SET status = %s
+                WHERE id = %s
+            """, (status, round_id))
+    
     def add_photo(self, user_id: int, file_id: str, round_id: int):
         """Добавить фото на модерацию"""
         with self.conn.cursor() as cur:
@@ -323,6 +332,16 @@ class Database:
             """, (round_id,))
             return cur.fetchone()[0]
     
+    def get_round_battles(self, round_id: int):
+        """Получить все батлы раунда"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM battles
+                WHERE round_id = %s
+                ORDER BY id
+            """, (round_id,))
+            return cur.fetchall()
+    
     def create_battle(self, round_id: int, photo1_id: int, photo2_id: int):
         """Создать батл между двумя фото"""
         with self.conn.cursor() as cur:
@@ -405,6 +424,19 @@ class Database:
                   AND p.votes >= %s
                 ORDER BY p.votes DESC
             """, (round_id, min_votes))
+            return cur.fetchall()
+    
+    def get_round_photos_with_votes(self, round_id: int):
+        """Получить все фото раунда с количеством голосов"""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT p.*, u.username
+                FROM photos p
+                JOIN users u ON u.telegram_id = p.user_id
+                WHERE p.round_id = %s 
+                  AND p.status = 'approved'
+                ORDER BY p.votes DESC
+            """, (round_id,))
             return cur.fetchall()
     
     def get_user_stats(self, telegram_id: int):
